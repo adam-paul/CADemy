@@ -1,23 +1,36 @@
 <script lang="ts">
-	import { createEventDispatcher } from 'svelte';
-
-	const dispatch = createEventDispatcher();
+	import type { BonusConfig } from '../../types';
+	import type { GameMode } from '../../types';
 
 	export let playerHealth: number;
 	export let equationsSolvedCorrectly: number;
-	export let formattedTimeTaken: string;
+	export let formattedLevelDuration: string;
+	export let currentLevelBonuses: BonusConfig[] = [];
+	export let levelScore: number;
 
-	function handleExit() {
-		dispatch('exitGame');
-	}
+	// Declare handlers purely as props expecting functions from the parent
+	export let handleExit: () => void;
+	export let handleNextLevel: () => void;
+	export let handleTryAgain: () => void;
 
-	function handleNextLevel() {
-		dispatch('nextLevel');
-	}
+	// Add gameMode and crafterSubMode props
+	export let gameMode: GameMode | null = null;
+	export let crafterSubMode: 'normal' | 'challenge' | null = null;
 
-	function handleTryAgain() {
-		dispatch('tryAgain');
-	}
+	// Reactive block to aggregate bonuses
+	$: aggregatedBonuses = currentLevelBonuses.reduce(
+		(acc, bonus) => {
+			if (!acc[bonus.id]) {
+				acc[bonus.id] = { ...bonus, count: 0 };
+			}
+			acc[bonus.id].count++;
+			return acc;
+		},
+		{} as Record<string, BonusConfig & { count: number }>
+	);
+
+	// Convert the aggregated object back to an array for easier iteration in the template
+	$: displayedBonuses = Object.values(aggregatedBonuses);
 </script>
 
 <div class="results-screen">
@@ -32,11 +45,50 @@
 			<span class="star">★</span>
 		{/if}
 	</div>
-	<div class="results-stats">
-		<p>Equations Solved: {equationsSolvedCorrectly}</p>
-		<p>Time Taken: {formattedTimeTaken}</p>
-		<!-- Add other stats here later -->
+
+	<div class="metrics">
+		<div class="metric">
+			<div class="metric-header">
+				<span class="metric-label">EQUATIONS</span>
+			</div>
+			<div class="metric-value">{equationsSolvedCorrectly}</div>
+		</div>
+		<div class="metric-divider">•</div>
+		<div class="metric">
+			<div class="metric-header">
+				<span class="metric-label">TIME</span>
+			</div>
+			<div class="metric-value">{formattedLevelDuration}</div>
+		</div>
+		<div class="metric-divider">•</div>
+		<div class="metric">
+			<div class="metric-header">
+				<span class="metric-label">
+					{#if playerHealth <= 0 && gameMode === 'crafter' && crafterSubMode === 'challenge'}
+						TOTAL SCORE
+					{:else}
+						SCORE
+					{/if}
+				</span>
+			</div>
+			<div class="metric-value">{levelScore}</div>
+		</div>
 	</div>
+
+	<!-- Display Aggregated Bonuses -->
+	{#if displayedBonuses.length > 0}
+		<div class="bonus-cards">
+			{#each displayedBonuses as bonus (bonus.id)}
+				<div class="bonus-badge">
+					<span class="bonus-emoji">🌟</span>
+					<span class="bonus-text">
+						<span class="bonus-name">{bonus.name} (x{bonus.count})</span>
+					</span>
+				</div>
+			{/each}
+		</div>
+	{/if}
+
 	<div class="results-feedback-prompt">
 		How was your experience?
 		<div class="feedback-buttons">
@@ -72,7 +124,6 @@
 		font-family: sans-serif;
 		width: 90%;
 		max-width: 400px;
-		/* Removed animation: pulse-shield-bar 1.5s infinite ease-in-out; as it likely belongs elsewhere */
 	}
 
 	.results-title {
@@ -133,12 +184,6 @@
 	.star:nth-child(6) {
 		left: 90%;
 		animation-delay: 0.4s;
-	}
-
-	.results-stats p {
-		margin: 0.5rem 0;
-		font-size: 1.1rem;
-		color: #333;
 	}
 
 	.results-feedback-prompt {
@@ -224,5 +269,82 @@
 
 	.results-actions button:active {
 		transform: scale(0.95); /* Depress */
+	}
+
+	.bonus-cards {
+		display: flex;
+		gap: 0.5rem;
+		justify-content: center;
+		flex-wrap: wrap;
+		margin: 0.5rem 0;
+	}
+
+	.bonus-badge {
+		background: #fff5cc;
+		padding: 0.3rem 0.7rem;
+		border-radius: 20px;
+		display: flex;
+		align-items: center;
+		gap: 0.3rem;
+		box-shadow: 0 1px 2px rgba(255, 152, 0, 0.1);
+	}
+
+	.bonus-emoji {
+		font-size: 0.9rem;
+	}
+
+	.bonus-text {
+		display: flex;
+		align-items: center;
+		gap: 0.3rem;
+		font-size: 0.9rem;
+	}
+
+	.bonus-name {
+		font-weight: bold;
+		color: #ff9800;
+	}
+
+	.metrics {
+		display: flex;
+		align-items: center;
+		justify-content: center;
+		gap: 1.5rem;
+		margin: 1.5rem 0;
+	}
+
+	.metric {
+		background: #f8f9fa;
+		padding: 0.75rem 1.25rem;
+		border-radius: 8px;
+		text-align: center;
+	}
+
+	.metric-header {
+		display: flex;
+		align-items: center;
+		justify-content: center;
+		gap: 0.4rem;
+		margin-bottom: 0.3rem;
+	}
+
+	.metric-label {
+		font-size: 0.5rem;
+		font-weight: 600;
+		color: #666;
+		letter-spacing: 0.05em;
+	}
+
+	.metric-value {
+		font-size: 1.75rem;
+		font-weight: bold;
+		color: #333;
+		line-height: 1;
+	}
+
+	.metric-divider {
+		color: #ddd;
+		font-size: 0.5rem;
+		margin-top: 1rem;
 	}
 </style>

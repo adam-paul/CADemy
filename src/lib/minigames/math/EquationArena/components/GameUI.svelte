@@ -1,151 +1,249 @@
 <script lang="ts">
 	import { createEventDispatcher } from 'svelte';
-	import { GameStatus, type SpellType } from '../types'; // Assuming types are colocated or adjust path
+	import type { GameMode, BonusConfig, SpellType, EnemyConfig } from '../types';
+	import { GameStatus } from '../types';
 
-	const dispatch = createEventDispatcher();
+	import { parseEquationForDisplay } from '../utils/display';
 
+	import SolverNumpad from './input/SolverNumpad.svelte';
+	import CrafterNumpad from './input/CrafterNumpad.svelte';
+	import EnemyDisplay from './display/EnemyDisplay.svelte';
+	import EquationDisplay from './display/EquationDisplay.svelte';
+	import SpellSelection from './input/SpellSelection.svelte';
+	import TopBar from './display/TopBar.svelte';
+	import FeedbackOverlay from './FeedbackOverlay.svelte';
+
+	// Update dispatcher types for new crafter events
+	const dispatch = createEventDispatcher<{
+		selectSpell: SpellType;
+		// Solver/Answer input events
+		handleInput: number;
+		clearInput: void;
+		handleBackspace: void;
+		// Crafter equation building events
+		inputChar: string;
+		clearCrafted: void;
+		backspaceCrafted: void;
+		submitEquation: void;
+		// General
+		castSpell: void;
+		// Level start event
+		startLevel: void;
+		// Reset Crafter back to crafting phase
+		resetCrafter: void;
+	}>();
+
+	// --- Exported Props ---
 	export let gameStatus: GameStatus;
 	export let playerHealth: number;
 	export let enemyHealth: number;
-	export let isShieldActive: boolean;
-	export let formattedTime: string; // Pass pre-formatted time
-	export let gameTime: number;
+	export let currentEnemyConfig: EnemyConfig | null = null;
+	export let formattedTime: string;
+	export let attackTimeRemaining: number; // Changed from gameTime
+	export let maxAttackTime: number; // Add maxAttackTime for progress indicator
 	export let enemyHit: boolean;
 	export let enemyDefeatedAnimating: boolean;
 	export let displayedDamage: number | null;
 	export let selectedSpell: SpellType | null;
 	export let lastAnswerCorrect: boolean | null;
-	export let currentEquation: string;
-	export let playerInput: string;
+	export let currentEquation: string; // Used by Solver mode
+	export let playerInput: string; // Current *answer* input
 	export let lastFullEquation: string;
 	export let lastPlayerInput: string;
+	export let gameMode: GameMode | null = null;
+	export let crafterSubMode: 'normal' | 'challenge' | null = null;
+	export let craftedEquationString: string = '';
+	export let isCraftingPhase: boolean = false;
+	export let crafterLevelDescription: string | null = null;
+	export let activeBonuses: BonusConfig[] = [];
+	export let evaluationError: string | null = null;
+	export let allowedChars: string[] | null = null;
+	export let isCraftedEquationValidForLevel: boolean = true;
+	export let currentLevelNumber: number = 1;
+	export let effectiveRuleLevel: number; // <<< ADDED: Effective level for rules/parsing
+	export let showCrafterFeedback: boolean = false;
+	export let crafterFeedbackDetails: {
+		incorrectEq: string;
+		incorrectVal: string;
+		correctVal: number | null;
+		steps: string[];
+	} | null = null;
+	export let damageTaken: number | null = null;
+	export let isEnemyTelegraphing: boolean = false;
+	export let isFeedbackActive: boolean = false;
+	export let waitingForPlayerStart: boolean = true;
+	export let isTimerFrozen: boolean = false;
+	export let scaledHealthBonus: number | null = null;
+	export let scaledTimeBonusSeconds: number | null = null; // ---> ADDITION: Time bonus prop
 
-	function handleSelectSpell(spell: SpellType) {
-		dispatch('selectSpell', spell);
+	// --- Event Handlers ---
+	// Bubble up the selectSpell event from the child component
+	function handleSelectSpellEvent(event: CustomEvent<SpellType>) {
+		dispatch('selectSpell', event.detail);
 	}
-
-	function handleInput(num: number) {
-		dispatch('handleInput', num);
+	// Other handlers remain the same
+	function handleAnswerInput(event: CustomEvent<number>) {
+		dispatch('handleInput', event.detail);
 	}
-
-	function handleClearInput() {
+	function handleClearAnswerInput() {
 		dispatch('clearInput');
 	}
-
-	function handleBackspace() {
+	function handleAnswerBackspace() {
 		dispatch('handleBackspace');
 	}
-
 	function handleCastSpell() {
 		dispatch('castSpell');
 	}
+	function handleStartLevel() {
+		dispatch('startLevel');
+	}
+
+	// ADDED: Handler for the reset event from CrafterNumpad
+	function handleResetToCrafting() {
+		dispatch('resetCrafter'); // Dispatch a new event upwards
+	}
+
+	// --- Reactive Segment Calculations ---
+	// (These still need to happen here as they depend on multiple props)
+	$: solverSolvingSegments = parseEquationForDisplay(
+		currentEquation.replace('?', playerInput + '_'),
+		effectiveRuleLevel // Use effective level
+	);
+	$: solverResultSegments = parseEquationForDisplay(
+		lastFullEquation.replace('?', lastPlayerInput) + '_',
+		effectiveRuleLevel // Use effective level
+	);
+	$: crafterCraftingSegments = parseEquationForDisplay(
+		(craftedEquationString || '') + '_',
+		effectiveRuleLevel // Use effective level
+	);
+	$: crafterSolvingEqSegments = parseEquationForDisplay(craftedEquationString, effectiveRuleLevel); // Use effective level
+	$: crafterSolvingInputSegments = parseEquationForDisplay(playerInput + '_', effectiveRuleLevel); // Use effective level
+	$: crafterResultSegments = parseEquationForDisplay(
+		lastFullEquation.replace('?', lastPlayerInput) + '_',
+		effectiveRuleLevel // Use effective level
+	);
+
+	// ---> ADDITION: Parse feedback strings into segments <--- */
+	$: incorrectAttemptSegments = crafterFeedbackDetails
+		? parseEquationForDisplay(
+				`${crafterFeedbackDetails.incorrectEq} = ${crafterFeedbackDetails.incorrectVal}`,
+				effectiveRuleLevel // Use effective level
+			)
+		: [];
+
+	$: correctSequenceSegments = crafterFeedbackDetails?.steps
+		? parseEquationForDisplay(crafterFeedbackDetails.steps.join(' = '), effectiveRuleLevel) // Use effective level
+		: [];
+	// ---> END ADDITION <--- */
 </script>
 
-<!-- Game UI Markup will go here -->
+<!-- Game UI Layout -->
 <div class="equation-arena-container" class:shake={false} class:shake-shield={false}>
-	<!-- Remove playerHit and shieldHit from class list here, managed by parent wrapper -->
-	<!-- Top Bar -->
-	<div class="top-bar">
-		<div class="health-player">
-			<span>❤️</span>
-			<!-- Replace progress with divs -->
-			<div class="player-health-bar-container" class:shield-active={isShieldActive}>
-				<div class="player-health-bar-fill" style="width: {playerHealth}%;"></div>
-			</div>
-			<span class="player-health-value">{playerHealth}/100</span>
-		</div>
-		<div class="timer" class:low-time={gameTime > 0 && gameTime < 10}>
-			⏱️ {formattedTime.replace('Time: ', '')}
-		</div>
-	</div>
+	<!-- Use the new TopBar component -->
+	<TopBar
+		{playerHealth}
+		{attackTimeRemaining}
+		{maxAttackTime}
+		{formattedTime}
+		{damageTaken}
+		{waitingForPlayerStart}
+		{isTimerFrozen}
+		{gameMode}
+		{crafterSubMode}
+		{scaledTimeBonusSeconds}
+	/>
 
-	<!-- Enemy Area -->
-	<div class="enemy-area">
-		<!-- Direct children for enemy display -->
-		<div class="enemy-icon" class:hit-reaction={enemyHit} class:defeated={enemyDefeatedAnimating}>
-			🐉
-		</div>
-		<div class="enemy-label">Enemy</div>
-		<progress class="enemy-health-bar" max="100" value={enemyHealth}></progress>
-		<div class="enemy-health-text">{enemyHealth}/100</div>
-		<!-- Damage Display Text -->
-		{#if displayedDamage !== null}
-			<span class="damage-dealt-text animate-damage">-{displayedDamage}</span>
-		{/if}
-	</div>
+	<!-- Enemy Display Component -->
+	<EnemyDisplay
+		{currentEnemyConfig}
+		{enemyHealth}
+		{enemyHit}
+		{enemyDefeatedAnimating}
+		{displayedDamage}
+		{lastAnswerCorrect}
+		{activeBonuses}
+		{gameStatus}
+		{isEnemyTelegraphing}
+		{gameMode}
+		{crafterSubMode}
+		{scaledHealthBonus}
+	/>
 
-	<!-- Spell Selection -->
-	<div class="spell-selection">
-		<!-- Spell buttons -->
-		<button on:click={() => handleSelectSpell('FIRE')} class:selected={selectedSpell === 'FIRE'}>
-			🔥 FIRE
-		</button>
-		<!-- No :active needed for spell selection, only visual state change -->
-		<button on:click={() => handleSelectSpell('ICE')} class:selected={selectedSpell === 'ICE'}>
-			🧊 ICE
-		</button>
-	</div>
+	<!-- Use the new SpellSelection component -->
+	<SpellSelection {selectedSpell} on:selectSpell={handleSelectSpellEvent} />
 
-	<!-- Equation Display -->
+	<!-- Equation Display Wrapper -->
 	<div
-		class="equation-display"
-		class:correct={lastAnswerCorrect === true && gameStatus === GameStatus.RESULT}
-		class:incorrect={lastAnswerCorrect === false && gameStatus === GameStatus.RESULT}
+		id="equation-display-wrapper"
+		class="equation-display-wrapper"
+		class:shake={false}
+		class:shake-shield={false}
 	>
-		{#if gameStatus === GameStatus.SOLVING}
-			<!-- Equation text -->
-			<span class="equation-text">{currentEquation.replace('?', playerInput + '_')}</span>
-		{:else if gameStatus === GameStatus.WAITING}
-			<span class="info-text">Waiting for spell selection...</span>
-		{:else if gameStatus === GameStatus.RESULT}
-			<!-- Result equation -->
-			<div class="result-equation">
-				<span class="equation-content">{lastFullEquation.replace('?', lastPlayerInput)}</span>
-			</div>
+		<div class="equation-display">
+			<EquationDisplay
+				{gameMode}
+				{gameStatus}
+				{isCraftingPhase}
+				{solverSolvingSegments}
+				{solverResultSegments}
+				{crafterCraftingSegments}
+				{crafterSolvingEqSegments}
+				{crafterSolvingInputSegments}
+				{crafterResultSegments}
+				{evaluationError}
+				{isFeedbackActive}
+				{showCrafterFeedback}
+				{crafterFeedbackDetails}
+				{crafterLevelDescription}
+				{currentLevelNumber}
+				{waitingForPlayerStart}
+				{lastAnswerCorrect}
+				on:startLevel={handleStartLevel}
+			/>
+		</div>
+
+		{#if showCrafterFeedback && crafterFeedbackDetails}
+			<FeedbackOverlay
+				{incorrectAttemptSegments}
+				{correctSequenceSegments}
+				correctVal={crafterFeedbackDetails.correctVal}
+			/>
 		{/if}
 	</div>
 
-	<!-- Number Pad -->
-	<div class="number-pad">
-		<!-- Number buttons -->
-		{#each [1, 2, 3, 4, 5, 6, 7, 8, 9] as num}
-			<button on:click={() => handleInput(num)} disabled={gameStatus !== GameStatus.SOLVING}>
-				{num}
-			</button>
-		{/each}
-		<button
-			on:click={handleClearInput}
-			disabled={gameStatus !== GameStatus.SOLVING}
-			class="button-clear"
-		>
-			C
-		</button>
-		<button
-			on:click={() => handleInput(0)}
-			disabled={gameStatus !== GameStatus.SOLVING}
-			class="button-zero"
-		>
-			0
-		</button>
-		<button
-			on:click={handleBackspace}
-			disabled={gameStatus !== GameStatus.SOLVING || playerInput.length === 0}
-			class="button-backspace"
-		>
-			DEL
-		</button>
-	</div>
-
-	<!-- Cast Button -->
-	<div class="cast-area">
-		<!-- Cast button -->
-		<button
-			on:click={handleCastSpell}
-			disabled={gameStatus !== GameStatus.SOLVING || playerInput === '' || !selectedSpell}
-			class:glow={gameStatus === GameStatus.SOLVING && playerInput !== '' && !!selectedSpell}
-		>
-			CAST SPELL
-		</button>
+	<!-- Conditional Numpad Rendering -->
+	<div class="numpad-area">
+		{#if gameMode === 'solver'}
+			<SolverNumpad
+				{gameStatus}
+				{playerInput}
+				on:handleInput={handleAnswerInput}
+				on:clearInput={handleClearAnswerInput}
+				on:handleBackspace={handleAnswerBackspace}
+			/>
+		{:else if gameMode === 'crafter'}
+			<CrafterNumpad
+				{gameStatus}
+				{isCraftingPhase}
+				{playerInput}
+				{selectedSpell}
+				{craftedEquationString}
+				{allowedChars}
+				{isCraftedEquationValidForLevel}
+				{waitingForPlayerStart}
+				{currentLevelNumber}
+				on:inputChar={(e: CustomEvent<string>) => dispatch('inputChar', e.detail)}
+				on:backspace={() => dispatch('backspaceCrafted')}
+				on:clear={() => dispatch('clearCrafted')}
+				on:submitEquation={() => dispatch('submitEquation')}
+				on:castSpell={handleCastSpell}
+				on:inputNumber={handleAnswerInput}
+				on:backspaceAnswer={handleAnswerBackspace}
+				on:clearAnswer={handleClearAnswerInput}
+				on:resetToCrafting={handleResetToCrafting}
+			/>
+		{/if}
 	</div>
 </div>
 
@@ -156,390 +254,72 @@
 		max-width: 500px; /* Example max width */
 		max-height: 800px; /* Example max height */
 		width: 90%;
-		height: 95%;
+		height: 100%;
 		display: flex;
 		flex-direction: column;
 		align-items: center;
-		justify-content: space-between;
-		padding: 1rem;
+		justify-content: flex-start; /* Changed from space-between */
+		padding: 1rem 1rem 0 1rem; /* Increased bottom padding */
 		box-sizing: border-box;
 		font-family: sans-serif;
 		background-color: #f0f4f8;
 		color: #333;
 		border-radius: 10px;
 		box-shadow: 0 4px 15px rgba(0, 0, 0, 0.1);
+		overflow-y: auto; /* Add vertical scroll if content overflows */
 	}
 
-	/* Add shake animation for player hit */
-	/* These shake animations are now controlled by the parent via arena-wrapper */
-	/* .equation-arena-container.shake {
-		animation: shake-player-hit 0.2s ease-in-out;
-	}
-
-	.equation-arena-container.shake-shield {
-		animation: shake-shield-block 0.3s ease-in-out;
-	} */
-
-	/* --- Existing Styles below (make sure they don't conflict) --- */
-	.top-bar {
-		display: flex;
-		justify-content: space-between; /* Space out items */
-		align-items: center; /* Vertically align items */
-		width: 100%;
-		padding: 0.5rem 1rem; /* Add some padding */
-		box-sizing: border-box;
-	}
-
-	.health-player {
-		color: #e74c3c;
-		font-size: 1.5rem; /* Larger font */
-		font-weight: bold;
-		background-color: rgba(231, 76, 60, 0.1); /* Light red background */
-		padding: 0.5rem 1rem;
-		border-radius: 6px;
-		display: flex; /* Use flexbox to arrange items */
-		align-items: center; /* Center items vertically */
-		gap: 0.5rem; /* Add space between icon, bar, text */
-		min-width: 180px; /* Adjust width */
-	}
-
-	/* New div-based health bar styles */
-	.player-health-bar-container {
-		width: 80px; /* Match previous width */
-		height: 10px; /* Match previous height */
-		border: 2px solid #e74c3c; /* Always have a 2px border, but transparent */
-		border-radius: 3px; /* Apply radius to container */
-		overflow: hidden; /* Crucial for clipping the inner div */
-		background-color: #f8d7da; /* Track background */
-		position: relative; /* Needed if adding inner elements later */
-		transition: border-color 0.3s ease; /* Smooth color transition */
-	}
-
-	.player-health-bar-fill {
-		height: 100%;
-		background-color: #e74c3c; /* Fill color */
-		border-radius: 0; /* Fill div does NOT need radius */
-		transition: width 0.3s ease-in-out; /* Animate width changes */
-	}
-
-	.player-health-value {
-		font-size: 0.9em; /* Slightly smaller than the main text */
-		font-weight: bold; /* Keep it bold */
-		color: #e74c3c;
-		line-height: 1; /* Adjust line height */
-	}
-
-	.timer {
-		color: #3498db;
-		font-size: 1.5rem; /* Larger font */
-		font-weight: bold;
-		background-color: rgba(52, 152, 219, 0.1); /* Light blue background */
-		padding: 0.5rem 1rem;
-		border-radius: 6px;
-		margin: 0; /* Remove margin */
-		min-width: 100px; /* Ensure minimum width */
-		text-align: center;
-	}
-
-	.enemy-area {
-		flex-grow: 1;
-		display: flex;
-		flex-direction: column;
-		justify-content: center;
-		align-items: center;
-		width: 100%;
-		gap: 0.25rem; /* Add small gap between elements */
-		position: relative; /* Make this the reference for absolute positioning */
-	}
-
-	.enemy-icon {
-		font-size: 3rem;
-	}
-
-	.enemy-label {
-		font-weight: bold;
-		font-size: 1.1rem;
-	}
-
-	.enemy-health-bar {
-		width: 100px; /* Fixed width for health bar */
-		height: 12px;
-		appearance: none; /* Override default appearance */
-		border: 1px solid #bdc3c7;
-		border-radius: 6px;
-		overflow: hidden; /* Ensure inner bar respects border-radius */
-	}
-
-	/* Styling the progress bar fill */
-	.enemy-health-bar::-webkit-progress-bar {
-		/* Background */
-		background-color: #eee;
-		border-radius: 6px;
-	}
-	.enemy-health-bar::-webkit-progress-value {
-		/* Fill */
-		background-color: #e74c3c; /* Red color for health */
-		border-radius: 6px;
-		transition: width 0.3s ease-in-out;
-	}
-	.enemy-health-bar::-moz-progress-bar {
-		/* Firefox Fill */
-		background-color: #e74c3c;
-		border-radius: 6px;
-		transition: width 0.3s ease-in-out;
-	}
-
-	.enemy-health-text {
-		font-size: 0.9rem;
-		color: #555;
-	}
-
-	.spell-selection {
-		display: flex;
-		gap: 1rem;
-		margin-bottom: 1rem;
-	}
-	.spell-selection button {
-		padding: 0.8rem 1.5rem;
-		font-size: 1rem;
-		border: 2px solid #ccc;
-		border-radius: 6px;
-		cursor: pointer;
-		background-color: #fff;
-		transition: all 0.2s ease;
-	}
-	.spell-selection button:hover:not(:disabled) {
-		background-color: #eef;
-	}
-	.spell-selection button.selected {
-		border-color: #3498db;
-		background-color: #d6eaf8;
-	}
-	.spell-selection button:disabled {
-		opacity: 0.5;
-		cursor: not-allowed;
+	.equation-display-wrapper {
+		position: relative;
+		width: 350px;
+		height: 90px;
+		margin-bottom: 1.5rem;
 	}
 
 	.equation-display {
-		background-color: #fff9e6;
-		border: 1px solid #f1c40f;
-		color: #333;
-		padding: 1rem 1.5rem;
-		width: 300px;
-		min-height: auto;
+		width: 350px;
+		height: 100%;
 		border-radius: 8px;
-		display: flex;
-		flex-direction: row;
-		justify-content: center;
-		align-items: center;
-		transition: background-color 0.1s ease-in-out;
-		margin-bottom: 1rem; /* Add spacing below the equation */
-	}
-
-	.equation-display.correct {
-		background-color: #e6f4ea;
-		border-color: #b7e4c7;
-		animation: pulse-correct 0.4s ease-in-out;
-	}
-
-	.equation-display.incorrect {
-		background-color: #f8d7da;
-		border-color: #f5c6cb;
-		animation: shake-incorrect 0.4s ease-in-out;
-	}
-
-	.equation-text,
-	.result-equation,
-	.info-text {
-		font-size: 1.8rem;
-		font-weight: bold;
-		line-height: 1.2;
-	}
-
-	.result-equation {
-		/* Styles specific to the solved equation display */
-		display: flex;
-		align-items: center;
-		justify-content: center;
-		position: relative;
-	}
-
-	.number-pad {
-		display: grid;
-		grid-template-columns: repeat(3, 1fr);
-		gap: 0.5rem;
-		margin-bottom: 1rem;
-		width: 70%; /* Adjust width slightly */
-		max-width: 250px;
-	}
-	.number-pad button {
 		padding: 1rem;
-		font-size: 1.2rem;
-		border: 1px solid #ccc;
-		border-radius: 4px;
-		cursor: pointer;
-		background-color: #fff;
-		transition:
-			background-color 0.2s,
-			transform 0.15s ease-out; /* Add transform transition */
-	}
-	.number-pad button:hover:not(:disabled) {
-		background-color: #eee;
-		transform: scale(1.1); /* Scale up on hover */
-	}
-	.number-pad button:disabled {
-		opacity: 0.5;
-		cursor: not-allowed;
+		box-sizing: border-box;
+		display: flex;
+		align-items: center;
+		justify-content: center;
+		font-size: 1.8em;
+		font-weight: bold;
+		text-align: center;
+		transition: none;
+		overflow: hidden;
+		white-space: nowrap;
 	}
 
-	/* Position Clear (C), Zero (0), and Backspace buttons */
-	.button-clear {
-		grid-column: 1 / 2; /* First column */
-	}
-	.button-zero {
-		grid-column: 2 / 3; /* Second column */
-	}
-	.button-backspace {
-		grid-column: 3 / 4; /* Third column */
-	}
-
-	.cast-area {
+	.numpad-area {
 		width: 100%;
 		display: flex;
 		justify-content: center;
 	}
-	.cast-area button {
-		padding: 1rem 2.5rem;
-		font-size: 1.2rem;
-		font-weight: bold;
-		border: none;
-		border-radius: 6px;
-		cursor: pointer;
-		background-color: #bdc3c7; /* Default grey */
-		color: #fff;
-		transition: all 0.2s ease;
+
+	/* --- Fraction Styling --- */
+	:global(.fraction) {
+		display: inline-flex;
+		flex-direction: column;
+		align-items: center;
+		justify-content: center;
+		vertical-align: middle;
+		margin: 0 0.1em;
+		line-height: 1;
 	}
-	.cast-area button:not(:disabled) {
-		background-color: #2ecc71; /* Green when active */
+	:global(.numerator) {
+		font-size: 0.8em;
+		line-height: 1;
+		padding-bottom: 0.1em;
 	}
-	.cast-area button:disabled {
-		opacity: 0.6;
-		cursor: not-allowed;
-	}
-	.cast-area button.glow:not(:disabled) {
-		animation: pulse-glow 1.5s infinite ease-in-out; /* Pulsing glow animation */
+	:global(.denominator) {
+		font-size: 0.8em;
+		line-height: 1;
+		border-top: 1.5px solid currentColor;
+		padding-top: 0.1em;
 	}
 
-	/* Added styles for damage text */
-	.damage-dealt-text {
-		position: absolute; /* Position relative to the enemy area */
-		top: 20%; /* Position near the top of the enemy area */
-		left: 50%; /* Center horizontally within the enemy area */
-		transform: translate(-50%, -50%);
-		font-size: 1.5rem; /* Make it noticeable */
-		font-weight: bold;
-		color: #e74c3c; /* Red for damage */
-		text-shadow: 1px 1px 2px rgba(0, 0, 0, 0.5); /* Add some contrast */
-		pointer-events: none; /* Prevent interaction */
-		opacity: 0; /* Start invisible for animation */
-	}
-
-	.animate-damage {
-		animation: show-damage 1s ease-out forwards;
-	}
-
-	/* Add styles for low-time timer */
-	.timer.low-time {
-		color: #e74c3c; /* Red color */
-		animation: low-time-pulse 1s infinite;
-	}
-
-	@keyframes low-time-pulse {
-		0%,
-		100% {
-			transform: scale(1);
-			opacity: 1;
-		}
-		50% {
-			transform: scale(1.05);
-			opacity: 0.8;
-		}
-	}
-
-	/* Enemy Hit Reaction Style */
-	.enemy-icon.hit-reaction {
-		animation: enemy-hit-react 0.2s ease-out;
-	}
-
-	@keyframes enemy-hit-react {
-		0% {
-			transform: scale(1);
-			filter: brightness(1);
-		}
-		50% {
-			transform: scale(1.1);
-			filter: brightness(1.8);
-		}
-		100% {
-			transform: scale(1);
-			filter: brightness(1);
-		}
-	}
-
-	.spell-selection button {
-		/* ... existing styles ... */
-		transition: all 0.2s ease;
-	}
-	.spell-selection button:active {
-		transform: scale(0.95); /* Slightly depress */
-	}
-
-	.number-pad button {
-		/* ... existing styles ... */
-		transition:
-			background-color 0.2s,
-			transform 0.15s ease-out;
-	}
-	.number-pad button:hover:not(:disabled) {
-		background-color: #eee;
-		transform: scale(1.1);
-	}
-	.number-pad button:active:not(:disabled) {
-		transform: scale(1); /* Scale down slightly more than hover */
-		background-color: #ddd; /* Darken slightly */
-	}
-
-	.cast-area button {
-		/* ... existing styles ... */
-		transition: all 0.2s ease;
-	}
-	.cast-area button:active:not(:disabled) {
-		transform: scale(0.95); /* Depress */
-	}
-	.cast-area button.glow:not(:disabled) {
-		animation: pulse-glow 1.5s infinite ease-in-out; /* Pulsing glow animation */
-	}
-
-	@keyframes pulse-glow {
-		0% {
-			box-shadow: 0 0 8px rgba(46, 204, 113, 0.5);
-		}
-		50% {
-			box-shadow: 0 0 20px rgba(46, 204, 113, 0.9);
-		}
-		100% {
-			box-shadow: 0 0 8px rgba(46, 204, 113, 0.5);
-		}
-	}
-
-	/* Player Health Bar Shield Active State */
-	.player-health-bar-container.shield-active {
-		border-color: #3498db; /* Blue border */
-		box-shadow: 0 0 6px rgba(52, 152, 219, 0.6); /* Subtle blue glow */
-		animation: pulse-shield-bar 1.5s infinite ease-in-out;
-	}
-
-	.enemy-icon.defeated {
-		animation: enemy-defeat 0.6s ease-in forwards;
-	}
+	/* Remove the crafter-objective style as it's no longer needed */
 </style>
